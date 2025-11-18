@@ -1,11 +1,11 @@
-# rhel-opinionated-infrastructure
-An opinionated tool for building a RHEL-based infrastructure.
+# rhel-opinionated-install-environment
+An opinionated tool for building pieces of a RHEL-based infrastructure.
 
 # Another tool? Why?
 I'm developing this tool because I'm unhapy with the current selection of tools available for standing up a homelab
 or an SOE for a RHEL-based environment. I'm basing much of the work on what Paul Armstrong has done in 
 https://github.com/parmstro/rhis-builder-provisioner and related repositories. I'm not simply forking his work and 
-modifying it because I believe it makes several core assumptions that are suboptimal. I'm taking his ideas and 
+modifying it because it makes several assumptions and makes several decisions that I disagree with. I'm taking his ideas and 
 reimplementing them in ways that I have made work for customer environments, not just for my homelab.
 
 # About me

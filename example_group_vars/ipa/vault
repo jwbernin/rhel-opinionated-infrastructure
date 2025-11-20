@@ -1,0 +1,5 @@
+ipadm_password: ChangeMe
+ipaadmin_password: ChangeMe
+ipaserver_domain: example.com
+ipaserver_realm: EXAMPLE.COM
+

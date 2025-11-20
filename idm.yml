@@ -22,7 +22,7 @@
 
   tasks:
     - name: Create full mesh topology segments
-      redhat.rhel_idm.topologysegment:
+      redhat.rhel_idm.ipatopologysegment:
         ipaadmin_password: "{{ ipaadmin_password }}"
         left: "{{ inventory_hostname }}"
         right: "{{ item }}"

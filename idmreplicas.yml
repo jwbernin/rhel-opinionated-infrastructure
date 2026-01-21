@@ -1,0 +1,8 @@
+---
+- name: Playbook to install IdM replicas with our opinionated settings
+  hosts: ipareplicas
+  become: true
+
+  roles:
+  - role: redhat.rhel_idm.ipareplica
+    state: present

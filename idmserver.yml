@@ -1,0 +1,9 @@
+---
+- name: Playbook to install IdM with our opinionated settings
+  hosts: ipaserver
+  become: true
+
+  roles:
+  - role: redhat.rhel_idm.ipaserver
+    state: present
+

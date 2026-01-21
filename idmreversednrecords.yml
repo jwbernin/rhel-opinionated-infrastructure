@@ -1,0 +1,16 @@
+---
+- name: Playbook to ensure all replicas have valid reverse DNS records
+  hosts: all
+
+  tasks:
+    - name: Create reverse records
+      redhat.rhel_idm.ipadnsrecord:
+        ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+        name: "{{ hostvars[item].ansible_all_ipv4_addresses[0].split('.')[3] }}"
+        ptr_hostname: "{{ item + '.' }}"
+        record_type: PTR
+        zone_name: "{{ hostvars[item].ansible_all_ipv4_addresses[0].split('.')[0:3] | reverse  | join('.') + '.in-addr.arpa' }}"
+      delegate_to: "{{ query('inventory_hostnames', 'ipaserver') | first }}"
+      loop: "{{ query('inventory_hostnames', 'satellite:ipa') }}"
+      when: item == inventory_hostname
+

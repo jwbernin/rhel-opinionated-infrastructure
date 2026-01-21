@@ -1,0 +1,14 @@
+---
+- name: Playbook to create full topology
+  hosts: ipareplicas
+
+  tasks:
+    - name: Create full mesh topology segments
+      redhat.rhel_idm.ipatopologysegment:
+        ipaadmin_password: "{{ ipaadmin_password }}"
+        left: "{{ inventory_hostname }}"
+        right: "{{ item }}"
+        state: present
+        suffix: "domain+ca"
+      loop: "{{ groups['ipareplicas'] }}"
+      when: item != inventory_hostname

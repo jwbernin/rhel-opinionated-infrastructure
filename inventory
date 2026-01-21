@@ -1,0 +1,16 @@
+[satellite]
+sat.lab.jbho.me
+
+[ipaserver]
+idm1.lab.jbho.me ansible_user=root
+
+[ipareplicas]
+idm2.lab.jbho.me ansible_user=root
+idm3.lab.jbho.me ansible_user=root
+
+[ipa:children]
+ipaserver
+ipareplicas
+
+[ipaclients:children]
+satellite

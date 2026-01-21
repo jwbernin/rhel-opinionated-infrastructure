@@ -1,0 +1,28 @@
+---
+- name: Configure Satellite
+  hosts: satellite
+  tasks:
+
+    - name: Create realm configuration
+      redhat.satellite.realm:
+        username: "{{ satAdmin }}"
+        password: "{{ satPass }}"
+        server_url: "https://{{ inventory_hostname }}"
+        name: "{{ ipa_realm }}"
+        validate_certs: false
+        realm_proxy: "{{ inventory_hostname }}"
+        realm_type: "Red Hat Identity Management"
+        state: present
+      delegate_to: localhost
+
+    - name: Modify Host Groups
+      redhat.satellite.hostgroup:
+        username: "{{ satAdmin }}"
+        password: "{{ satPass }}"
+        server_url: "https://{{ inventory_hostname }}"
+        organization: "{{ satOrg }}"
+        validate_certs: false
+        realm: "{{ ipa_realm }}"
+        name: "{{ item.0.name }}-{{ item.1.name }}-HG"
+      loop: "{{ le_pairs | product(content_views, locations) | list }}"
+      delegate_to: localhost

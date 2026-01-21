@@ -1,0 +1,12 @@
+---
+- name: Ensure a reverse lookup zone exists for each Subnet
+  hosts: ipaserver
+
+  tasks:
+    - name: Create reverse zones
+      redhat.rhel_idm.ipadnszone:
+        ipaadmin_password: "{{ ipaadmin_password }}"
+        name_from_ip: "{{ item.network }}/{{ item.mask }}"
+    
+    
+      loop: "{{ hostvars[groups['satellite'] | first].subnets }}"

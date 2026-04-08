@@ -1,0 +1,175 @@
+---
+- name: Ensure AAP servers are configured correctly
+  hosts: aap
+  tasks:
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/ipa-ca.crt
+      src: "/etc/ipa/ca.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+    run_once: yes
+
+  - name: Copy the CA (chain) to the server
+    ansible.builtin.copy:
+      dest: /etc/pki/ca-trust/source/anchors/ipa.ca
+      src: certs/ipa-ca.crt
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Extract the IPA trust certificate for the OS
+    ansible.builtin.command:
+      cmd: "/usr/bin/update-ca-trust extract"
+
+- name: Configure IdM with appropriate AAP account
+  hosts: ipaserver
+  tasks:
+
+  - name: Ensure the aap user exists
+    redhat.rhel_idm.ipauser:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      first: AAP
+      last: Install User
+      name: aap
+    register: user_create
+
+  - name: Set the aap user's password via ldappasswd
+    shell:
+      cmd: "/usr/bin/ldappasswd -D {{ ipaserveradmindn }} -s {{ aapUserPassword }} -x -w {{ ipaadmin_password }} uid=aap,cn=users,cn=accounts,dc={{ ipaserver_domain | replace('.',',dc=') }}"
+    when: user_create.changed == true
+
+- name: Ensure database server is ready
+  hosts: aap-db
+  roles:
+    - aap_db
+
+  tasks:
+  - name: Read existing postgres passwords from Vault (if any)
+    community.hashi_vault.vault_kv2_get:
+      url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+      auth_method: ldap
+      username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+      password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+      engine_mount_point: secure
+      path: adminpasswords/postgres
+      validate_certs: false
+    register: read_results
+    run_once: true
+    delegate_to: localhost
+
+  - name: Set postgresl adminpassword
+    ansible.builtin.set_fact:
+      pgpass: "{{ read_results.secret.postgresql_admin_password }}"
+    run_once: true
+
+  - name: Create AAP Postgres Superuser
+    community.postgresql.postgresql_user:
+      name: pgadmin
+      password: "{{ pgpass }}"
+      role_attr_flags: CREATEDB,CREATEROLE,SUPERUSER
+      encrypted: true
+    become: true
+    become_user: postgres
+
+  - name: Create pgadmin database
+    community.postgresql.postgresql_db:
+      name: pgadmin
+    become: true
+    become_user: postgres
+
+- name: Ensure haproxy instance ready
+  hosts: aap-loadbalancer
+  tasks:
+
+  - name: Put certificate in place
+    ansible.builtin.copy:
+      src: "{{ item }}"
+      dest: /etc/pki/tls/aap/
+    loop:
+      - certs/aap-gateway-cert.key
+      - certs/aap.lab.jbho.me-cert.crt
+
+  - name: Assemble the certificate and key so haproxy can use it
+    ansible.builtin.assemble:
+      src: /etc/pki/tls/aap/
+      dest: /etc/pki/tls/aap-cert-bundle.pem
+
+  - name: Open haproxy firewall
+    ansible.posix.firewalld:
+      service: "{{ item }}"
+      immediate: yes
+      state: enabled
+      permanent: true
+    loop:
+      - http
+      - https
+
+  - name: Start haproxy service
+    ansible.builtin.service:
+      enabled: true
+      name: haproxy
+      state: started
+
+- name: Prep the installer node
+  hosts: aap-installer
+  tasks:
+
+  - name: Install prepreq packages
+    ansible.builtin.dnf:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - ansible-core
+      - wget
+      - git-core
+      - rsync
+      - vim
+
+  - name: Set up items for the aap user
+    block:
+      - name: Copy the vars file to the installer node
+        ansible.builtin.copy:
+          src: files/aap-inventory-vars
+          dest: /home/aap/aap-inventory-vars
+  
+      - name: Ensure gateway certificates are available for installer on installer node
+        ansible.builtin.copy:
+          src: "{{ item }}"
+          dest: /home/aap/certs/
+        loop:
+          - certs/aap-gateway-cert.key
+          - certs/aap.lab.jbho.me-cert.crt
+          - certs/ipa-ca.crt
+
+      - name: Ensure the .ssh directory exists for the aap user
+        ansible.builtin.file:
+          path: /home/aap/.ssh
+          setype: ssh_home_t
+          state: directory
+          mode: 0700
+
+      - name: Generate SSH keypair
+        community.crypto.openssh_keypair:
+          path: /home/aap/.ssh/id_ed25519
+          type: ed25519
+
+      - name: Fetch pubkey for distribution
+        ansible.builtin.fetch:
+          src: /home/aap/.ssh/id_ed25519.pub
+          dest: files/installer-ssh-key
+          flat: yes
+
+      - name: Distribute SSH key
+        ansible.posix.authorized_key:
+          state: present
+          user: aap
+          key: "{{ lookup('file', 'files/installer-ssh-key') }}"
+        delegate_to: "{{ item }}"
+        loop:
+          "{{ query('inventory_hostnames', 'gateway:controller:hub:eda') }}"
+
+    become: yes
+    become_user: aap
+  

@@ -1,0 +1,131 @@
+---
+- name: Configure IdM with appropriate bindDN accounts
+  hosts: ipaserver
+  tasks:
+  - name: Ensure group is present
+    redhat.rhel_idm.ipagroup:
+      description: Group with service accounts and long-lived passwords
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: bindgroup
+      state: present
+
+  - name: Retrieve the gid of the group just created
+    ansible.builtin.shell:
+      cmd: "ipa group-show bindgroup --raw"
+    register: ldap_group_gid
+
+  - name: Set fact with gidnumber
+    set_fact:
+      gidnumber: "{{ item | regex_replace('^.*: ','') }}"
+    when: "'gidnumber' in item"
+    loop: "{{ ldap_group_gid.stdout_lines }}"
+
+  - name: Ensure password policy for group is present
+    redhat.rhel_idm.ipapwpolicy:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: bindgroup
+      failinterval: 30
+      gracelimit: 0
+      lockouttime: 30
+      maxfail: 3
+      maxlife: 3650
+      minlength: 12
+      minclasses: 2
+      priority: 1
+      state: present
+  
+  - name: Ensure the Satellite bind user exists
+    redhat.rhel_idm.ipauser:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      first: Satellite
+      last: Binduser
+      name: satbind
+      gid: "{{ gidnumber }}"
+
+  - name: Set the satbind user's password via ldappasswd
+    shell:
+      cmd: "/usr/bin/ldappasswd -D {{ ipaserveradmindn }} -s {{ satBindUserPassword }} -x -w {{ ipaadmin_password }} uid=satbind,cn=users,cn=accounts,dc={{ ipaserver_domain | replace('.',',dc=') }}"
+
+  - name: Ensure the SatAdmin user group exists
+    redhat.rhel_idm.ipagroup:
+      description: Satellite Administrators
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: satadmins
+      state: present
+
+  - name: Ensure the SatUser user group exists
+    redhat.rhel_idm.ipagroup:
+      description: Satellite Users
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: satusers
+      state: present
+
+
+- name: Configure Satellite for LDAP authentication from IdM
+  hosts: satellite
+  tasks:
+
+  - name: Ensure LDAP Authenticaiton Source exists
+    redhat.satellite.auth_source_ldap:
+      account: "{{ hostvars[groups['ipaserver'] | first].ipaserveradmindn }}"
+      account_password: "{{ hostvars[groups['ipaserver'] | first].satBindUserPassword }}"
+      attr_firstname: givenName
+      attr_lastname: sn
+      attr_login: uid
+      attr_mail: email
+      base_dn: "cn=users,cn=accounts,dc={{ hostvars[groups['ipaserver'] | first].ipaserver_domain | replace('.',',dc=') }}"
+      groups_base: "cn=groups,cn=accounts,dc={{ hostvars[groups['ipaserver'] | first].ipaserver_domain | replace('.',',dc=') }}"
+      host: "{{ groups['ipaserver'][0] }}"
+      name: IdM LDAP
+      onthefly_register: true
+      server_type: free_ipa
+      usergroup_sync: true
+      username: "{{ satAdmin }}"
+      password: "{{ satPass }}"
+      server_url: "https://{{ inventory_hostname }}"
+      validate_certs: false
+    delegate_to: localhost
+
+  - name: Ensure the Satellite Admin group exists
+    redhat.satellite.usergroup:
+      admin: true
+      name: idmsatadmins
+      state: present
+      username: "{{ satAdmin }}"
+      password: "{{ satPass }}"
+      server_url: "https://{{ inventory_hostname }}"
+      validate_certs: false
+    delegate_to: localhost
+
+  - name: Ensure the IdM Satellite User group exists
+    redhat.satellite.usergroup:
+      name: idmsatusers
+      state: present
+      username: "{{ satAdmin }}"
+      password: "{{ satPass }}"
+      server_url: "https://{{ inventory_hostname }}"
+      validate_certs: false
+    delegate_to: localhost
+
+  - name: Ensure the Administrators external group is linked
+    redhat.satellite.external_usergroup:
+      name: satadmins
+      auth_source: IdM LDAP
+      usergroup: idmsatadmins 
+      username: "{{ satAdmin }}"
+      password: "{{ satPass }}"
+      server_url: "https://{{ inventory_hostname }}"
+      validate_certs: false
+    delegate_to: localhost
+
+  - name: Ensure the Users external group is linked
+    redhat.satellite.external_usergroup:
+      name: satusers
+      auth_source: IdM LDAP
+      usergroup: idmsatusers
+      username: "{{ satAdmin }}"
+      password: "{{ satPass }}"
+      server_url: "https://{{ inventory_hostname }}"
+      validate_certs: false
+    delegate_to: localhost
+

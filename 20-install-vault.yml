@@ -1,0 +1,112 @@
+---
+- name: Ensure HashiCorp Vault is present and configured
+  hosts: vault
+  tasks:
+
+  - name: Ensure the proper repo is enabled
+    rhsm_repository:
+      name:
+        - "{{ hashi_repo }}"
+
+  - name: Ensure the 'vault' package is installed
+    dnf:
+      name: vault
+      state: present
+
+  - name: Ensure we have a place to put the CSRs
+    ansible.builtin.file:
+      name: certs
+      state: directory
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Set the Vault server's common name
+    set_fact:
+      target_common_name: "{{ groups['vault'] | first }}"
+
+  - name: Ensure we have a private key for each host we're interested in
+    community.crypto.openssl_privatekey:
+      path: "certs/{{ target_common_name }}.key"
+      size: 4096
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve key from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/vault-cert.key
+      src: "certs/{{ target_common_name }}.key"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/vault-ca.crt
+      src: "/etc/ipa/ca.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure we have a CSR
+    community.crypto.openssl_csr:
+      path: "certs/{{ target_common_name }}.csr"
+      privatekey_path: "certs/{{ target_common_name }}.key"
+      common_name: "{{ target_common_name }}"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure the cert has been requested
+    redhat.rhel_idm.ipacert:
+      ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+      add: true
+      csr_file: "certs/{{ target_common_name }}.csr"
+      principal: "HTTP/{{ target_common_name }}"
+      state: requested
+      certificate_out: "certs/{{ target_common_name }}.crt"
+    register: cert
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve Certificate file from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/vault-cert.crt
+      src: "certs/{{ target_common_name }}.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Create the certificate on the Vault server
+    ansible.builtin.copy:
+      dest: /opt/vault/tls/tls.crt # pre-defined by vault RPM
+      src: certs/vault-cert.crt
+      owner: vault
+      group: vault
+
+  - name: Copy the key to the Vault server
+    ansible.builtin.copy:
+      dest: /opt/vault/tls/tls.key # pre-defined by vault RPM
+      src: certs/vault-cert.key
+      owner: vault
+      group: vault
+
+  - name: Copy the CA (chain) to the Vault server
+    ansible.builtin.copy:
+      dest: /etc/pki/ca-trust/source/anchors/ipa.ca
+      src: certs/vault-ca.crt
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Extract the IPA trust certificate for the OS
+    ansible.builtin.command:
+      cmd: "/usr/bin/update-ca-trust extract"
+
+  - name: Open firewall ports for HCVault
+    ansible.posix.firewalld:
+      immediate: yes
+      permanent: yes
+      port: "{{ item }}/tcp"
+      state: enabled
+    loop:
+      - 8200
+      - 8201
+
+  - name: Ensure the Vault service is started
+    ansible.builtin.systemd_service:
+      enabled: true
+      name: vault
+      state: started
+

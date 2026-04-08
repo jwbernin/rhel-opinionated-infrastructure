@@ -1,3 +1,9 @@
 .vaultpass
 group_vars/
 artifacts/
+certs/
+context
+eebuilder
+execution-environment.yml
+testing
+testing.yml

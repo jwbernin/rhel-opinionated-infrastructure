@@ -1,0 +1,97 @@
+---
+- name: Ensure GitLab server is configured correctly
+  hosts: gitlab
+  tasks:
+
+  - name: Ensure we have a place to put the CSRs
+    ansible.builtin.file:
+      name: certs
+      state: directory
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Set the GitLab server's common name
+    set_fact:
+      target_common_name: "{{ groups['gitlab'] | first }}"
+
+  - name: Ensure we have a private key for each host we're interested in
+    community.crypto.openssl_privatekey:
+      path: "certs/{{ target_common_name }}.key"
+      size: 4096
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve key from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/gitlab-cert.key
+      src: "certs/{{ target_common_name }}.key"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/gitlab-ca.crt
+      src: "/etc/ipa/ca.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure we have a CSR
+    community.crypto.openssl_csr:
+      path: "certs/{{ target_common_name }}.csr"
+      privatekey_path: "certs/{{ target_common_name }}.key"
+      common_name: "{{ target_common_name }}"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure the cert has been requested
+    redhat.rhel_idm.ipacert:
+      ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+      add: true
+      csr_file: "certs/{{ target_common_name }}.csr"
+      principal: "HTTP/{{ target_common_name }}"
+      state: requested
+      certificate_out: "certs/{{ target_common_name }}.crt"
+    register: cert
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve Certificate file from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/gitlab-cert.crt
+      src: "certs/{{ target_common_name }}.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Create the certificate on the GitLab server
+    ansible.builtin.copy:
+      dest: "/etc/gitlab/ssl/{{ inventory_hostname }}.crt"
+      src: certs/gitlab-cert.crt
+      owner: root
+      group: root
+
+  - name: Copy the key to the GitLab server
+    ansible.builtin.copy:
+      dest: "/etc/gitlab/ssl/{{ inventory_hostname }}.key"
+      src: certs/gitlab-cert.key
+      owner: root
+      group: root
+
+  - name: Copy the CA (chain) to the GitLab server
+    ansible.builtin.copy:
+      dest: /etc/pki/ca-trust/source/anchors/ipa.ca
+      src: certs/gitlab-ca.crt
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Extract the IPA trust certificate for the OS
+    ansible.builtin.command:
+      cmd: "/usr/bin/update-ca-trust extract"
+
+  - name: Open firewall ports for GitLab
+    ansible.posix.firewalld:
+      immediate: yes
+      permanent: yes
+      port: "{{ item }}/tcp"
+      state: enabled
+    loop:
+      - 22
+      - 80
+      - 443
+

@@ -1,0 +1,28 @@
+---
+- name: Configure IdM with appropriate bindDN accounts
+  hosts: ipaserver
+  tasks:
+
+  - name: Ensure the Keycloak bind user exists
+    redhat.rhel_idm.ipauser:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      first: Keycloak
+      last: Binduser
+      name: keycloakbind
+
+  - name: Add keycloakbind user to bindgroup group
+    redhat.rhel_idm.ipagroup:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: bindgroup
+      action: member
+      user:
+        - keycloakbind
+
+  - name: Set the keycloakbind user's password via ldappasswd
+    shell:
+      cmd: "/usr/bin/ldappasswd -D {{ ipaserveradmindn }} -s {{ keycloakBindUserPassword }} -x -w {{ ipaadmin_password }} uid=keycloakbind,cn=users,cn=accounts,dc={{ ipaserver_domain | replace('.',',dc=') }}"
+
+  - name: Ensure the Keycloak Admin group exists
+    redhat.rhel_idm.ipagroup:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: keycloakadmin

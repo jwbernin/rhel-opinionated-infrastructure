@@ -1,0 +1,104 @@
+---
+- name: Ensure Keycloak server is configured correctly
+  hosts: keycloak
+  tasks:
+
+  - name: Ensure we have a place to put the CSRs
+    ansible.builtin.file:
+      name: certs
+      state: directory
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Set the Keycloak server's common name
+    set_fact:
+      target_common_name: "{{ groups['keycloak'] | first }}"
+
+  - name: Ensure we have a private key for each host we're interested in
+    community.crypto.openssl_privatekey:
+      path: "certs/{{ target_common_name }}.key"
+      size: 4096
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve key from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/keycloak-cert.key
+      src: "certs/{{ target_common_name }}.key"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/keycloak-ca.crt
+      src: "/etc/ipa/ca.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure we have a CSR
+    community.crypto.openssl_csr:
+      path: "certs/{{ target_common_name }}.csr"
+      privatekey_path: "certs/{{ target_common_name }}.key"
+      common_name: "{{ target_common_name }}"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure the cert has been requested
+    redhat.rhel_idm.ipacert:
+      ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+      add: true
+      csr_file: "certs/{{ target_common_name }}.csr"
+      principal: "HTTP/{{ target_common_name }}"
+      state: requested
+      certificate_out: "certs/{{ target_common_name }}.crt"
+    register: cert
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve Certificate file from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/keycloak-cert.crt
+      src: "certs/{{ target_common_name }}.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure the certs directories exist
+    ansible.builtin.file:
+      mode: 0750
+      owner: root
+      group: root
+      path: /etc/keycloak/ssl
+      state: directory
+
+  - name: Create the certificate on the Keycloak server
+    ansible.builtin.copy:
+      dest: "/etc/keycloak/ssl/{{ inventory_hostname }}.crt"
+      src: certs/keycloak-cert.crt
+      owner: root
+      group: root
+
+  - name: Copy the key to the Keycloak server
+    ansible.builtin.copy:
+      dest: "/etc/keycloak/ssl/{{ inventory_hostname }}.key"
+      src: certs/keycloak-cert.key
+      owner: root
+      group: root
+
+  - name: Copy the CA (chain) to the Keycloak server
+    ansible.builtin.copy:
+      dest: /etc/pki/ca-trust/source/anchors/ipa.ca
+      src: certs/keycloak-ca.crt
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Extract the IPA trust certificate for the OS
+    ansible.builtin.command:
+      cmd: "/usr/bin/update-ca-trust extract"
+
+  - name: Open firewall ports for Keycloak
+    ansible.posix.firewalld:
+      immediate: yes
+      permanent: yes
+      port: "{{ item }}/tcp"
+      state: enabled
+    loop:
+      - 80
+      - 443
+

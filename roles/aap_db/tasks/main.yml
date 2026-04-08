@@ -1,0 +1,59 @@
+---
+# tasks file for externaldb
+- name: Ensure postgresql is installed
+  package:
+    name: postgresql
+    state: present
+
+- name: Ensure postgresql is installed
+  package:
+    name: postgresql-server
+    state: present
+
+- name: Run the postgres initdb script
+  command:
+    cmd: "postgresql-setup --initdb"
+    creates: /var/lib/pgsql/data/pg_hba.conf
+
+- name: Configure pg_hba
+  community.postgresql.postgresql_pg_hba:
+    dest: /var/lib/pgsql/data/pg_hba.conf
+    contype: host
+    source: "{{ item }}"
+    method: md5
+  loop: "{{query('inventory_hostnames', 'gateway:controller:hub:eda:aap-installer:aap-loadbalancer:aap-db')}}"
+
+- name: Ensure Psycopg2 installed
+  package:
+    name: python3-psycopg2
+    state: present
+
+- name: Ensure system fully updated
+  package:
+    name: '*'
+    state: latest
+
+- name: Open up PostgreSQL firewall service
+  ansible.posix.firewalld:
+    service: postgresql
+    state: enabled
+    permanent: yes
+    immediate: yes
+
+- name: Make Postgres listen on all network devices
+  lineinfile:
+    path: /var/lib/pgsql/data/postgresql.conf
+    regexp: '#listen_addresses'
+    line: "listen_addresses = '*'"
+    state: present
+
+- name: Start the PostgreSQL service
+  systemd:
+    enabled: yes
+    name: postgresql
+    state: restarted
+
+- name: Generate SSH key pair
+  community.crypto.openssh_keypair:
+    path: /root/.ssh/id_ed25519
+    type: ed25519

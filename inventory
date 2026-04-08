@@ -14,3 +14,51 @@ ipareplicas
 
 [ipaclients:children]
 satellite
+
+[vault]
+vault.lab.jbho.me ansible_user=root
+
+[gitlab]
+git.lab.jbho.me ansible_user=root
+
+[keycloak]
+keycloak.lab.jbho.me ansible_user=root
+
+[gateway]
+aap1.lab.jbho.me ansible_user=root
+aap2.lab.jbho.me ansible_user=root
+
+[controller]
+aap1.lab.jbho.me ansible_user=root
+aap2.lab.jbho.me ansible_user=root
+
+[hub]
+aap1.lab.jbho.me ansible_user=root
+aap2.lab.jbho.me ansible_user=root
+
+[eda]
+aap1.lab.jbho.me ansible_user=root
+aap2.lab.jbho.me ansible_user=root
+
+[aap-db]
+aap-db.lab.jbho.me ansible_user=root
+
+[aap-nfs]
+aap-nfs.lab.jbho.me ansible_user=root
+
+[aap-installer]
+aap-installer.lab.jbho.me ansible_user=root
+
+[aap-loadbalancer]
+aap.lab.jbho.me ansible_user=root
+
+[aap:children]
+gateway
+controller
+automationhub
+eda
+aap-db
+aap-nfs
+aap-installer
+aap-loadbalancer
+

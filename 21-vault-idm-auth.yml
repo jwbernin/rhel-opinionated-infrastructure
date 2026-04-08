@@ -1,0 +1,45 @@
+---
+- name: Configure IdM with appropriate bindDN accounts
+  hosts: ipaserver
+  tasks:
+
+  - name: Ensure the Vault bind user exists
+    redhat.rhel_idm.ipauser:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      first: Vault
+      last: Binduser
+      name: vaultbind
+
+  - name: Add vaultbind user to bindgroup group
+    redhat.rhel_idm.ipagroup:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: bindgroup
+      action: member
+      user:
+        - vaultbind
+
+  - name: Set the satbind user's password via ldappasswd
+    shell:
+      cmd: "/usr/bin/ldappasswd -D {{ ipaserveradmindn }} -s {{ vaultBindUserPassword }} -x -w {{ ipaadmin_password }} uid=vaultbind,cn=users,cn=accounts,dc={{ ipaserver_domain | replace('.',',dc=') }}"
+
+  - name: Ensure the Vault Admin user group exists
+    redhat.rhel_idm.ipagroup:
+      description: Vault Administrators
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: vaultadmins
+      state: present
+
+  - name: Ensure the Vault Writer user group exists
+    redhat.rhel_idm.ipagroup:
+      description: Vault Writers
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: vaultwriters
+      state: present
+
+  - name: Ensure the Vault Reader user group exists
+    redhat.rhel_idm.ipagroup:
+      description: Vault Readers
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: vaultreaders
+      state: present
+

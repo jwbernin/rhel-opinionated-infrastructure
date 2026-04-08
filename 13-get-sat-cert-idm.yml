@@ -1,0 +1,72 @@
+---
+- name: Generate an HTTPS certificate for Satellite in IdM
+  hosts: ipaserver
+
+  tasks:
+  - name: Ensure we have a place to put the CSRs
+    ansible.builtin.file:
+      name: certs
+      state: directory
+
+  - name: Set the Satellite's common name
+    set_fact:
+      target_common_name: "{{ groups['satellite'] | first }}"
+
+  - name: Ensure we have a private key for each host we're interested in
+    community.crypto.openssl_privatekey:
+      path: "certs/{{ target_common_name }}.key"
+      size: 4096
+
+  - name: Retrieve key from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/idm-cert.key
+      src: "certs/{{ target_common_name }}.key"
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/idm-ca.crt
+      src: "/etc/ipa/ca.crt"
+
+  - name: Ensure we have a CSR
+    community.crypto.openssl_csr:
+      path: "certs/{{ target_common_name }}.csr"
+      privatekey_path: "certs/{{ target_common_name }}.key"
+      common_name: "{{ target_common_name }}"
+
+  - name: Ensure the cert has been requested
+    redhat.rhel_idm.ipacert:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      add: true
+      csr_file: "certs/{{ target_common_name }}.csr"
+      principal: "HTTP/{{ target_common_name }}"
+      state: requested
+      certificate_out: "certs/{{ target_common_name }}.crt"
+    register: cert
+
+  - name: Retrieve Certificate file from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: idm-cert.crt
+      src: "certs/{{ target_common_name }}.crt"
+
+
+- name: Update Satellite HTTPS certificate
+  hosts: satellite
+  tasks:
+
+  - name: Create the certificate on the Satellite
+    ansible.builtin.copy:
+      dest: idm-cert.crt
+      src: certs/idm-cert.crt
+
+  - name: Copy the key to the Satellite
+    ansible.builtin.copy:
+      dest: idm-cert.key
+      src: certs/idm-cert.key
+
+  - name: Copy the CA (chain) to the Satellite
+    ansible.builtin.copy:
+      dest: idm-ca.crt
+      src: certs/idm-ca.crt

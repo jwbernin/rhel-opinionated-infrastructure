@@ -1,0 +1,310 @@
+---
+- name: Generate valid inventory variable definitions for AAP install
+  hosts: localhost
+  tasks:
+
+  - name: Set database host target variable
+    ansible.builtin.set_fact:
+      db_host_name: "{{ groups['aap-db'] | first }}"
+
+  - name: Ensure service database host entries present
+    ansible.builtin.lineinfile:
+      line: "{{ item }}_pg_host={{ db_host_name }}"
+      path: files/aap-inventory-vars
+      search_string: "{{ item }}_pg_host="
+      state: present
+    loop: "{{ aap_services }}"
+
+  - name: Set Hashi password generation policy value for AAP targets
+    ansible.builtin.set_fact:
+      aap_password_policy_hcl: |
+        length=18
+
+        rule "charset" {
+          charset = "abcdefghijklmnopqrstuvwxyz"
+          min-chars = 1
+        }
+
+        rule "charset" {
+          charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          min-chars = 1
+        }
+
+        rule "charset" {
+          charset = "0123456789"
+          min-chars = 1
+        }
+
+        rule "charset" {
+          charset = "-=._"
+          min-chars = 1
+        }
+    run_once: true
+
+  - name: Write the password policy to Hashi Vault
+    community.hashi_vault.vault_write:
+      url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+      path: sys/policies/password/aap
+      data:
+        policy: "{{ aap_password_policy_hcl }}"
+      auth_method: ldap
+      username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+      password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+      validate_certs: false
+    run_once: true
+
+  - block:
+      - name: Read existing passwords from Vault (if any)
+        community.hashi_vault.vault_kv2_get:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          engine_mount_point: secure
+          path: adminpasswords/aap
+          validate_certs: false
+        register: read_results
+        run_once: true
+        delegate_to: localhost
+    
+      - name: Create pass_store dict
+        ansible.builtin.set_fact:
+          pass_store: {}
+        run_once: true
+    
+      - name: Build pass_store struct
+        ansible.builtin.set_fact:
+          #var: "read_results.secret.{{ item }}"
+          pass_store: "{{ pass_store | default ({}) | combine({item: read_results.secret[item]}) }}"
+        loop: "{{ aap_services }}"
+        run_once: true
+    
+    rescue:
+      - name: Generate passwords via Hashi Vault
+        community.hashi_vault.vault_read:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          path: sys/policies/password/aap/generate
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          validate_certs: false
+        register: "passwords"
+        loop: "{{ aap_services }}"
+        run_once: true
+    
+      - name: Build data block for Vault write
+        ansible.builtin.set_fact:
+          pass_store: "{{ pass_store | default ({}) | combine({item.item: item.data.data.password}) }}"
+        loop: "{{ passwords.results }}"
+        run_once: true
+    
+      - name: Store passwords in KVv2 store
+        community.hashi_vault.vault_kv2_write:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          engine_mount_point: secure
+          path: adminpasswords/aap
+          data: "{{ pass_store }}"
+          validate_certs: false
+        loop: "{{ passwords.results }}"
+        run_once: true
+    
+  - name: Ensure admin password entries present in AAP inventory file
+    ansible.builtin.lineinfile:
+      line: "{{ item }}_admin_password=\"{{ pass_store[item] }}\""
+      path: files/aap-inventory-vars
+      search_string: "{{ item }}_admin_password="
+      state: present
+    loop: "{{ aap_services }}"
+
+  - name: Clear pass_store
+    ansible.builtin.set_fact:
+      pass_store: {}
+    run_once: true
+
+  - block:
+      - name: Read existing postgres passwords from Vault (if any)
+        community.hashi_vault.vault_kv2_get:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          engine_mount_point: secure
+          path: adminpasswords/postgres
+          validate_certs: false
+        register: read_results
+        run_once: true
+        delegate_to: localhost
+    
+      - name: Create pass_store dict
+        ansible.builtin.set_fact:
+          pass_store: {}
+        run_once: true
+    
+      - name: Build pass_store struct
+        ansible.builtin.set_fact:
+          pass_store: "{{ pass_store | default ({}) | combine({item: read_results.secret[item]}) }}"
+        loop:
+          - postgresql_admin_password
+          - controller_pg_password
+          - hub_pg_password
+          - eda_pg_password
+          - gateway_pg_password
+        run_once: true
+    
+    rescue:
+      - name: Generate passwords via Hashi Vault
+        community.hashi_vault.vault_read:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          path: sys/policies/password/aap/generate
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          validate_certs: false
+        register: "passwords"
+        loop:
+          - postgresql_admin_password
+          - controller_pg_password
+          - hub_pg_password
+          - eda_pg_password
+          - gateway_pg_password
+        run_once: true
+    
+      - name: Build data block for Vault write
+        ansible.builtin.set_fact:
+          pass_store: "{{ pass_store | default ({}) | combine({item.item: item.data.data.password}) }}"
+        loop: "{{ passwords.results }}"
+        run_once: true
+    
+      - name: Store passwords in KVv2 store
+        community.hashi_vault.vault_kv2_write:
+          url: "{{ hostvars[groups['vault'][0]]['vault_url'] }}"
+          auth_method: ldap
+          username: "{{ hostvars[groups['vault'][0]]['vault_user'] }}"
+          password: "{{ hostvars[groups['vault'][0]]['vault_password'] }}"
+          engine_mount_point: secure
+          path: adminpasswords/postgres
+          data: "{{ pass_store }}"
+          validate_certs: false
+        loop: "{{ passwords.results }}"
+        run_once: true
+
+  - name: Ensure admin password entries present in AAP inventory file
+    ansible.builtin.lineinfile:
+      line: "{{ item }}=\"{{ pass_store[item] }}\""
+      path: files/aap-inventory-vars
+      search_string: "{{ item }}="
+      state: present
+    loop: 
+      - postgresql_admin_password
+      - controller_pg_password
+      - hub_pg_password
+      - eda_pg_password
+      - gateway_pg_password
+
+  - name: Set shared data path
+    ansible.builtin.lineinfile:
+      line: "hub_shared_data_path={{ groups['aap-nfs'] | first }}:/export/automationhub"
+      path: files/aap-inventory-vars
+      search_string: "hub_shared_data_path="
+      state: present
+
+  - name: Ensure gateway main URL set
+    ansible.builtin.lineinfile:
+      line: "gateway_main_url=https://{{ groups['aap-loadbalancer'] | first }}/"
+      path: files/aap-inventory-vars
+      search_string: "gateway_main_url="
+      state: present
+
+  - name: Retrieve CA from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: certs/ipa-ca.crt
+      src: "/etc/ipa/ca.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure ca cert name in inventory vars file
+    ansible.builtin.lineinfile:
+      line: "custom_ca_cert=certs/ipa-ca.crt"
+      path: files/aap-inventory-vars
+      search_string: "custom_ca_cert="
+      state: present
+
+  - name: Ensure we have a place to put the CSRs
+    ansible.builtin.file:
+      name: certs
+      state: directory
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Ensure we have a private key for each host we're interested in
+    community.crypto.openssl_privatekey:
+      path: "certs/aap-gateway.key"
+      size: 4096
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+    register: "keygen"
+
+
+  - name: Retrieve key from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: "certs/aap-gateway-cert.key"
+      src: "certs/aap-gateway.key"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+    when: keygen.changed == true
+
+  - name: Ensure we have a CSR
+    community.crypto.openssl_csr:
+      path: "certs/aap-gateway.csr"
+      privatekey_path: "certs/aap-gateway.key"
+      common_name: "{{ groups['aap-loadbalancer'] | first }}"
+      subject_alt_name: "{{ [prefix] | product(groups['gateway']) | map('join') | list }}"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+    register: "csrgen"
+    vars:
+      prefix: "DNS:"
+
+  - name: Ensure the appropriate service principals and their aliases exist
+    redhat.rhel_idm.ipaservice:
+      ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+      name: "HTTP/{{ groups['aap-loadbalancer'] | first }}"
+      principal: "{{ [prefix] | product(groups['gateway']) | map('join') | list }}"
+      state: present
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+    vars:
+      prefix: "HTTP/"
+
+  - name: Ensure the cert has been requested
+    redhat.rhel_idm.ipacert:
+      ipaadmin_password: "{{ hostvars[groups['ipaserver'] | first].ipaadmin_password }}"
+      add: true
+      csr_file: "certs/aap-gateway.csr"
+      principal: "HTTP/{{ groups['aap-loadbalancer'] | first }}"
+      state: requested
+      certificate_out: "certs/{{ groups['aap-loadbalancer'] | first }}.crt"
+    register: cert
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Retrieve Certificate file from IdM server
+    ansible.builtin.fetch:
+      flat: true
+      dest: "certs/{{ groups['aap-loadbalancer'] | first }}-cert.crt"
+      src: "certs/{{ groups['aap-loadbalancer'] | first }}.crt"
+    delegate_to: "{{ groups['ipaserver'] | first }}"
+
+  - name: Put key name for gateway cert into inventory vars file
+    ansible.builtin.lineinfile:
+      line: "gateway_tls_key=certs/aap-gateway-cert.key"
+      path: files/aap-inventory-vars
+      search_string: "gateway_tls_key="
+      state: present
+
+  - name: Put cert name for gateway into inventory vars file
+    ansible.builtin.lineinfile:
+      line: "gateway_tls_cert=certs/{{ groups['aap-loadbalancer'] | first }}-cert.crt"
+      path: files/aap-inventory-vars
+      search_string: "gateway_tls_cert="
+      state: present
+
+

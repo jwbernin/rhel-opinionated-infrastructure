@@ -1,0 +1,28 @@
+---
+- name: Configure IdM with appropriate bindDN accounts
+  hosts: ipaserver
+  tasks:
+
+  - name: Ensure the GitLab bind user exists
+    redhat.rhel_idm.ipauser:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      first: GitLab
+      last: Binduser
+      name: gitlabbind
+
+  - name: Add vaultbind user to bindgroup group
+    redhat.rhel_idm.ipagroup:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: bindgroup
+      action: member
+      user:
+        - gitlabbind
+
+  - name: Set the gitlabbind user's password via ldappasswd
+    shell:
+      cmd: "/usr/bin/ldappasswd -D {{ ipaserveradmindn }} -s {{ gitlabBindUserPassword }} -x -w {{ ipaadmin_password }} uid=gitlabbind,cn=users,cn=accounts,dc={{ ipaserver_domain | replace('.',',dc=') }}"
+
+  - name: Ensure the GitLab Admin group exists
+    redhat.rhel_idm.ipagroup:
+      ipaadmin_password: "{{ ipaadmin_password }}"
+      name: gitlabadmin
